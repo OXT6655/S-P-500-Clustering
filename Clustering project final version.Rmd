@@ -1,0 +1,459 @@
+---
+title: "Clustering project"
+output: html_document
+date: "2025-01-11"
+---
+
+---
+title: "S&P 500 Clustering Analysis"
+author: "Otajon Yuldashev"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: 
+      collapsed: false
+    toc_depth: 3
+    number_sections: false
+    theme: united
+    highlight: tango
+---
+
+<style>
+html {
+  scroll-behavior: smooth;
+}
+</style>
+
+
+# Introduction
+This analysis aims to group S&P 500 stocks into clusters based on their risk and reward profiles. By leveraging clustering techniques, we identify distinct groups of stocks that can inform investment strategies. The analysis uses metrics such as average return, volatility, and market capitalization to determine meaningful clusters.
+
+--- 
+
+# Data processing
+Objective:
+Prepare the datasets for analysis by cleaning, transforming, and aligning the data.
+
+#### Data Loading:
+Imported two datasets and necessary libraries:
+
+- Historical stock prices.
+- S&P 500 prices (close, open, high, low, adj.close, volume).
+- S&P 500 company metadata (sectors, market cap, etc.).
+
+
+```{r,warning=FALSE}
+library(tidyverse)
+library(cluster)
+library(factoextra)
+
+# Load datasets
+sp500_prices <- read.csv("sp500_stocks.csv")
+sp500_metadata <- read.csv("sp500_companies.csv")
+
+
+# Inspect data
+head(sp500_prices)
+head(sp500_metadata)
+```
+
+
+#### Data preprocessing:
+
+```{r}
+# Convert Date to Date format
+sp500_prices$Date <- as.Date(sp500_prices$Date)
+
+
+# # Handle missing values by omitting rows with NA
+sp500_prices <- na.omit(sp500_prices)
+
+
+# Calculate daily returns
+sp500_prices <- sp500_prices %>%
+  arrange(Symbol, Date) %>%
+  group_by(Symbol) %>%
+  mutate(Daily_Return = log(Close) - log(lag(Close))) %>%
+  ungroup() %>%
+  filter(!is.na(Daily_Return))  # Remove NA values from returns
+
+
+
+```
+
+
+#### Feature Engineering:
+Calculated daily returns using the formula:
+
+\[
+\text{Daily_return} = \log\left(\frac{P_t}{P_{t-1}}\right)
+\]
+
+Computed key metrics:
+
+- **Average Return:** Mean of daily returns for each stock.
+- **Volatility:** Standard deviation of daily returns.
+
+Merged metadata (sector and market cap) with these computed features.
+
+
+```{r}
+
+# Feature Engineering: Calculate average return and volatility for each stock
+features <- sp500_prices %>%
+  group_by(Symbol) %>%
+  summarise(
+    Avg_Return = mean(Daily_Return, na.rm = TRUE),
+    Volatility = sd(Daily_Return, na.rm = TRUE)
+  ) %>%
+  left_join(sp500_metadata %>% select(Symbol, Sector), by = "Symbol")  # Add Sector metadata
+
+```
+
+# Output:
+A clean dataset with the following features:
+
+- **Symbol:** Stock ticker.
+- **Avg_Return:** Average daily return.
+- **Volatility:** Daily return volatility.
+- **Market_Cap:** Market capitalization.
+- **Sector:** Company sector.
+
+# Exploratory Data Analysis (EDA)
+
+## Objective:
+Understand the distribution and relationships between key metrics.
+
+
+Visualized Distributions:
+
+```{r}
+# Plot distribution of average returns
+ggplot(features, aes(x = Avg_Return)) +
+  geom_histogram(bins = 30, fill = "blue", alpha = 0.7) +
+  labs(title = "Distribution of Average Returns",
+       x = "Average Return",
+       y = "Frequency") +
+  theme_minimal()
+
+```
+
+
+
+The histogram for average returns shows that most values are centered near zero, with very few large deviations. This suggests that average returns are relatively stable for most stocks, though there may be some outliers or stocks with extreme performance.
+
+
+
+
+```{r}
+# Plot distribution of volatility
+ggplot(features, aes(x = Volatility)) +
+  geom_histogram(bins = 30, fill = "red", alpha = 0.7) +
+  labs(title = "Distribution of Volatility",
+       x = "Volatility",
+       y = "Frequency") +
+  theme_minimal()
+```
+
+
+
+The histogram for volatility indicates a right-skewed distribution, meaning that most stocks have low volatility, but some have much higher values. This skewness is common in financial datasets and highlights that only a few stocks have very high risk or price fluctuations.
+
+---
+
+# Clustering Methodology
+
+We scale the features because Avg_Return and Volatility have different ranges and units. Scaling ensures that both features contribute equally to the distance calculation during K-means clustering, preventing the feature with a larger range (e.g., volatility) from dominating the clustering process.
+
+```{r}
+# Scale features
+scaled_features <- scale(features[, c("Avg_Return", "Volatility")])
+```
+
+
+In order to determine the optimal number fo clusters we are going to use Silhouette method for both K-means and Clara clustering algorithms.
+
+
+```{r}
+
+# Silhouette Method for K-means
+fviz_nbclust(scaled_features, kmeans, method = "silhouette") +
+  labs(title = "Silhouette Method for Optimal Clusters")
+
+```
+
+So, in order to find optimal number of clusters for K-means clustering I used Elbow Method, but was not 100% sure of results of it as it was showing 2 clusters. So then I decided to try Silhouette method , which clearly confirmed that the number of clusters should be 2 for this fuatures. Then I decided to skip Elbow method and include silhouette method instead. 
+
+
+
+#### K-means Clustering:
+
+
+Performed K-means clustering to group stocks based on average return and volatility.
+
+```{r}
+
+# Perform K-means clustering with k = 2, because from our Elbow method we have chosen 2 clusters as optimal number.
+set.seed(123)
+kmeans_result <- kmeans(scaled_features, centers = 2, nstart = 25)
+
+# Add cluster assignments to features
+features$Cluster <- kmeans_result$cluster
+
+# Visualize K-means clusters
+fviz_cluster(kmeans_result, data = scaled_features,
+             geom = "point", stand = FALSE,
+             ellipse = TRUE) +
+  labs(title = "K-means Clustering of Stocks")
+
+
+```
+
+## Overview
+
+#### **Cluster Spread**  
+Cluster 1 is more tightly packed, indicating that the stocks in this group have similar, stable characteristics. On the other hand, Cluster 2 is more spread out, showing greater variability in average returns and volatility.
+
+#### **Cluster Location**  
+The stocks in Cluster 2 generally have higher volatility and, in some cases, higher returns compared to Cluster 1.
+
+
+
+# Cluster Evaluation
+
+### Objective:
+Assess the quality of the clusters and validate the clustering results.
+
+- **Silhouette Score:** Measures how well each stock fits within its cluster compared to other clusters.
+
+```{r}
+# Compute silhouette score
+silhouette_score <- silhouette(kmeans_result$cluster, dist(scaled_features))
+
+# Plot silhouette analysis
+fviz_silhouette(silhouette_score) +
+  labs(title = "Silhouette Analysis for K-means Clustering")
+
+# Average silhouette width
+mean_sil_width <- mean(silhouette_score[, "sil_width"])
+print(paste("Average Silhouette Width: ", round(mean_sil_width, 3)))
+
+```
+
+The silhouette analysis for K=2 clustering shows that Cluster 1 is well-defined, with most points having high silhouette widths. However, Cluster 2 exhibits some overlap or ambiguity, as indicated by lower silhouette widths for certain points. The overall average silhouette width of 0.49 (moderate clustering) supports the decision to use K=2.
+
+
+---
+
+
+#### **Purpose of the Plot**
+This visualization helps understand the **sectoral composition** of each cluster, offering insights into the risk-return profiles of sectors within the S&P 500 stocks. It provides a useful guide for investors aiming to diversify their portfolios based on sector-specific strategies.
+
+
+```{r}
+# Sector distribution within clusters
+ggplot(features, aes(x = as.factor(Cluster), fill = Sector)) +
+  geom_bar(position = "fill") +
+  labs(
+    title = "Sector Distribution Across Clusters",
+    x = "Cluster",
+    y = "Proportion",
+    fill = "Sector"
+  ) +
+  theme_minimal()
+```
+
+
+### Summary of the Sector Composition Bar Plot
+
+This bar plot illustrates the **sectoral composition** of stocks within each cluster, highlighting the proportion of various sectors in the two clusters.
+
+---
+
+#### Key Observations
+1. **Cluster 1**:
+   - **Dominant Sectors**:
+     - Sectors like **Technology**, **Utilities**, and **Consumer Defensive** hold significant proportions in this cluster.
+   - **Characteristics**:
+     - These sectors typically represent **low-risk investments** with relatively stable performance.
+     - The heavy presence of **Utilities** suggests that this cluster is more defensive in nature, catering to risk-averse investors.
+
+2. **Cluster 2**:
+   - **Dominant Sectors**:
+     - Sectors like **Technology**, **Healthcare**, and **Consumer Cyclical** are prominent.
+   - **Characteristics**:
+     - These sectors are generally **growth-oriented** and exhibit higher variability, aligning with the higher-risk, higher-reward profile of this cluster.
+     - The presence of **Healthcare** and **Consumer Cyclical** indicates a focus on sectors that tend to thrive during economic expansion.
+
+
+#### Key Insights
+- **Sector Overlap**:
+  - Both clusters have a notable presence of the **Technology sector**, but its proportion is higher in **Cluster 2**, indicating the sector's higher risk-return dynamics.
+- **Cluster Differentiation**:
+  - **Cluster 1** leans toward stable, defensive sectors like Utilities and Consumer Defensive.
+  - **Cluster 2** focuses on growth-oriented sectors like Technology, Healthcare, and Consumer Cyclical.
+
+
+### Summary of the Box Plot
+
+The box plot displays the **distribution of average returns** for the two clusters identified through K-means clustering:
+
+1. **Cluster 1 (Red)**:
+   - The stocks in this cluster generally have **lower average returns** with a tighter range of values.
+   - This indicates a more stable and consistent return profile, suitable for risk-averse investors.
+   - A few outliers with extremely low returns are visible, but they don't significantly affect the overall distribution.
+
+2. **Cluster 2 (Blue)**:
+   - The stocks in this cluster exhibit **higher average returns** with a broader range of values compared to Cluster 1.
+   - The wider spread suggests greater variability, consistent with higher risk and potential reward.
+   - Some outliers with very high returns are observed, reinforcing the cluster's higher-risk nature.
+
+
+```{r}
+
+ggplot(features, aes(x = as.factor(Cluster), y = Avg_Return, fill = as.factor(Cluster))) +
+  geom_boxplot() +
+  labs(title = "Distribution of Avg_Return by Cluster",
+       x = "Cluster",
+       y = "Average Return",
+       fill = "Cluster") +
+  theme_minimal()
+```
+
+
+
+
+### Key Insights
+- **Cluster 1**: Consists of low-return, stable stocks with minimal variability.
+- **Cluster 2**: Comprises higher-return, high-risk stocks with greater variability and potential outliers.
+
+This visualization reinforces the **risk-return tradeoff** observed in the clustering process, providing a clear differentiation between the two clusters.
+
+
+# Interpretation and Insights
+
+This section summarizes the results from the clustering analysis and provides actionable insights based on the identified clusters.
+
+## Cluster Profiles
+
+The following table summarizes the characteristics of each cluster, including average return, volatility, market cap, and stock count.
+
+```{r cluster-summary}
+# Cluster summary table
+cluster_summary <- features %>%
+  group_by(Cluster) %>%
+  summarise(
+    Avg_Return = mean(Avg_Return, na.rm = TRUE),
+    Volatility = mean(Volatility, na.rm = TRUE),
+    Count = n()
+  )
+
+# Print the cluster summary table
+knitr::kable(cluster_summary, caption = "Cluster Profiles: Summary of Key Metrics")
+
+```
+
+
+---
+
+Sector Trends
+
+The following table and visualization illustrate the sectoral composition of each cluster
+
+```{r cluster-summary-1}
+# Sector distribution by cluster
+sector_distribution <- features %>%
+  group_by(Cluster, Sector) %>%
+  summarise(Count = n()) %>%
+  arrange(Cluster, desc(Count))
+
+# Print the sector distribution table
+knitr::kable(sector_distribution, caption = "Sector Distribution by Cluster")
+
+# Visualize sector composition
+# Calculate sector distribution by cluster
+sector_distribution <- features %>%
+  group_by(Cluster, Sector) %>%
+  summarise(Count = n()) %>%
+  arrange(Cluster, desc(Count))
+
+# View the summarized table
+View(sector_distribution)
+
+```
+
+
+### Conclusion
+
+This project applied clustering techniques (**K-means**) to group S&P 500 stocks based on key financial metrics such as **average return**, **volatility**. The goal was to identify distinct clusters of stocks to provide actionable insights for investors. 
+
+
+The analysis revealed two meaningful clusters that capture different risk-return profiles and sector compositions of the stocks.
+
+---
+
+### Insights
+
+#### **Cluster Profiles**
+1. **Cluster 1**:
+   - **Characteristics**:
+     - Lower **average return** and **volatility**.
+     - Predominantly large-cap stocks from stable, defensive sectors like **utilities** and **consumer staples**.
+   - **Risk-Reward Profile**:
+     - Low-risk, low-return investments.
+   - **Investor Type**:
+     - Suitable for conservative investors focused on stable returns.
+
+2. **Cluster 2**:
+   - **Characteristics**:
+     - Higher **average return** and **volatility**.
+     - Stocks from growth-oriented sectors like **technology** and **healthcare**.
+   - **Risk-Reward Profile**:
+     - High-risk, high-reward investments.
+   - **Investor Type**:
+     - Suitable for aggressive investors willing to tolerate higher risk for potentially greater returns.
+
+#### **Sector Trends**
+- Cluster 1: Dominated by **defensive sectors** such as utilities and consumer staples.
+- Cluster 2: Heavy representation of **growth sectors** like technology and healthcare.
+
+#### **Cluster Evaluation**
+- K-means clustering provided more cohesive and interpretable clusters, making it the preferred method for this dataset.
+- The performance gap between K-means and CLARA suggests that the dataset characteristics (e.g., size and structure) align better with K-means.
+
+---
+
+### Recommendations for Investors
+
+#### **1. Portfolio Diversification**
+- **Cluster 1**: 
+  - Invest in Cluster 1 stocks as a foundation for a **low-risk portfolio**.
+  - Focus on defensive sectors to hedge against market volatility.
+- **Cluster 2**:
+  - Allocate a smaller portion of the portfolio to Cluster 2 stocks for **growth potential**.
+  - Be mindful of the higher risk and volatility associated with these investments.
+
+#### **2. Sector-Specific Strategies**
+- During **economic downturns**:
+  - Favor stocks in Cluster 1 (utilities, consumer staples) for stability.
+- During **bull markets**:
+  - Focus on Cluster 2 stocks (technology, healthcare) to maximize returns.
+
+#### **3. Monitor Risk-Reward Balance**
+- Use the clustering insights to maintain a balance between risk and reward in the portfolio.
+- Reassess sector compositions periodically to adapt to changing market conditions.
+
+This project demonstrates the value of clustering analysis in identifying distinct groups of stocks and tailoring investment strategies accordingly. K-means clustering, in particular, proved to be a robust and effective method for this dataset. 
+
+
+### Useful Links:
+
+1. [K-means Clustering in R - RDocumentation](https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/kmeans)  
+2. [Silhouette Analysis in R - CRAN Clustering Documentation](https://cran.r-project.org/web/packages/cluster/cluster.pdf)  
+3. [Data Visualization in R with ggplot2 - R for Data Science](https://r4ds.had.co.nz/data-visualisation.html)  
+4. [Factoextra Package for Clustering Visualization in R](https://rpkgs.datanovia.com/factoextra/index.html)  
+5. [Data Transformation with dplyr](https://dplyr.tidyverse.org/articles/dplyr.html)  
+
+
+
